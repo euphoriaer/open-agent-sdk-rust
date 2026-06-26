@@ -2,6 +2,13 @@ use std::path::{Path, PathBuf};
 
 use crate::types::skill::{LoadedSkill, SkillMetadata, SkillSource};
 
+fn is_hidden_dir(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.starts_with('.'))
+        .unwrap_or(false)
+}
+
 /// Parse a SKILL.md file into (metadata, markdown_body).
 /// Frontmatter is delimited by `---` lines at the start of the file.
 pub fn parse_skill_file(content: &str) -> Option<(SkillMetadata, String)> {
@@ -28,9 +35,7 @@ pub fn load_skill_from_dir(dir: &Path, source: SkillSource) -> Option<LoadedSkil
     let content = std::fs::read_to_string(&skill_file).ok()?;
     let (metadata, body) = parse_skill_file(&content)?;
 
-    let name = metadata
-        .name
-        .clone();
+    let name = metadata.name.clone();
     let name = if name.is_empty() {
         dir.file_name()?.to_string_lossy().to_string()
     } else {
@@ -57,7 +62,7 @@ pub fn load_from_dir(parent_dir: &Path, source: SkillSource) -> Vec<LoadedSkill>
     let mut skills = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        if path.is_dir() && !is_hidden_dir(&path) {
             if let Some(skill) = load_skill_from_dir(&path, source.clone()) {
                 skills.push(skill);
             } else {
@@ -95,7 +100,7 @@ fn collect_skills_recursive(
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        if path.is_dir() && !is_hidden_dir(&path) {
             if let Some(skill) = load_skill_from_dir(&path, source.clone()) {
                 skills.push(skill);
             } else {
@@ -105,14 +110,19 @@ fn collect_skills_recursive(
     }
 }
 
-/// Load skills from all global directories in priority order.
-/// Deduplicates by name — first found wins.
-pub fn load_all_global(home_dir: &Path) -> Vec<LoadedSkill> {
-    let dirs: Vec<(PathBuf, SkillSource)> = vec![
+fn global_skill_dirs(home_dir: &Path) -> Vec<(PathBuf, SkillSource)> {
+    vec![
         (home_dir.join(".aqbot").join("skills"), SkillSource::AQBot),
         (home_dir.join(".claude").join("skills"), SkillSource::Claude),
         (home_dir.join(".agents").join("skills"), SkillSource::Agents),
-    ];
+        (home_dir.join(".codex").join("skills"), SkillSource::Codex),
+    ]
+}
+
+/// Load skills from all global directories in priority order.
+/// Deduplicates by name — first found wins.
+pub fn load_all_global(home_dir: &Path) -> Vec<LoadedSkill> {
+    let dirs = global_skill_dirs(home_dir);
 
     let mut result = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -125,6 +135,14 @@ pub fn load_all_global(home_dir: &Path) -> Vec<LoadedSkill> {
         }
     }
     result
+}
+
+/// Load all global skills without deduplication for management UIs.
+pub fn load_all_global_for_management(home_dir: &Path) -> Vec<LoadedSkill> {
+    global_skill_dirs(home_dir)
+        .into_iter()
+        .flat_map(|(dir, source)| load_from_dir(&dir, source))
+        .collect()
 }
 
 /// Walk up from `cwd` looking for `.git/` or `.aqbot/` to detect the project root.

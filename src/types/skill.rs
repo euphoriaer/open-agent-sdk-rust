@@ -65,6 +65,7 @@ where
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SkillSource {
     AQBot,
+    Codex,
     Claude,
     Agents,
     Project,
@@ -74,6 +75,7 @@ impl SkillSource {
     pub fn as_str(&self) -> &'static str {
         match self {
             SkillSource::AQBot => "aqbot",
+            SkillSource::Codex => "codex",
             SkillSource::Claude => "claude",
             SkillSource::Agents => "agents",
             SkillSource::Project => "project",
