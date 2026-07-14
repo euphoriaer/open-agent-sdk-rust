@@ -195,13 +195,10 @@ struct ShellRunner {
 }
 
 fn build_shell_runner(command: &str, shell_override: Option<&str>) -> ShellRunner {
-    if let Some(shell) = shell_override {
-        if !shell.is_empty() && std::path::Path::new(shell).is_file() {
-            return ShellRunner {
-                program: shell.to_string(),
-                args: vec!["-c".to_string(), command.to_string()],
-            };
-        }
+    if let Some(runner) =
+        try_shell_override(command, shell_override, |path| Path::new(path).is_file())
+    {
+        return runner;
     }
     select_shell_runner(
         command,
@@ -209,6 +206,26 @@ fn build_shell_runner(command: &str, shell_override: Option<&str>) -> ShellRunne
         std::env::var("ComSpec").ok(),
         program_exists,
     )
+}
+
+/// Prefer a configured shell binary when the path exists; otherwise warn and return None.
+fn try_shell_override(
+    command: &str,
+    shell_override: Option<&str>,
+    exists: impl FnOnce(&str) -> bool,
+) -> Option<ShellRunner> {
+    let shell = shell_override.filter(|s| !s.is_empty())?;
+    if exists(shell) {
+        return Some(ShellRunner {
+            program: shell.to_string(),
+            args: vec!["-c".to_string(), command.to_string()],
+        });
+    }
+    tracing::warn!(
+        shell = %shell,
+        "Configured shell binary not found; falling back to PATH auto-detection"
+    );
+    None
 }
 
 fn select_shell_runner<F>(
@@ -315,7 +332,32 @@ fn check_destructive(command: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{select_shell_runner, ShellRunner};
+    use super::{select_shell_runner, try_shell_override, ShellRunner};
+
+    #[test]
+    fn shell_override_uses_configured_binary_when_it_exists() {
+        let runner = try_shell_override("node -v", Some("/custom/bash"), |_| true)
+            .expect("override should apply");
+
+        assert_eq!(
+            runner,
+            ShellRunner {
+                program: "/custom/bash".to_string(),
+                args: vec!["-c".to_string(), "node -v".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn shell_override_falls_back_when_binary_missing() {
+        assert!(try_shell_override("node -v", Some("/missing/bash"), |_| false).is_none());
+    }
+
+    #[test]
+    fn shell_override_ignores_empty_string() {
+        assert!(try_shell_override("node -v", Some(""), |_| true).is_none());
+        assert!(try_shell_override("node -v", None, |_| true).is_none());
+    }
 
     #[test]
     fn select_shell_runner_falls_back_to_powershell_on_windows() {
