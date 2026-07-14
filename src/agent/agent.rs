@@ -80,6 +80,8 @@ pub struct AgentOptions {
     pub debug: Option<bool>,
     /// Additional working directories.
     pub additional_directories: Option<Vec<String>>,
+    /// Shell binary path override (e.g. bash.exe). None uses PATH auto-detection.
+    pub shell_binary: Option<String>,
 }
 
 impl Default for AgentOptions {
@@ -119,6 +121,7 @@ impl Default for AgentOptions {
             sandbox: None,
             debug: None,
             additional_directories: None,
+            shell_binary: None,
         }
     }
 }
@@ -165,6 +168,7 @@ pub struct Agent {
     pub(crate) can_use_tool: Option<CanUseToolFn>,
     pub(crate) session_id: String,
     pub(crate) abort_signal: CancellationToken,
+    pub(crate) shell_binary: Option<String>,
 }
 
 impl Agent {
@@ -243,6 +247,7 @@ impl Agent {
             can_use_tool: options.can_use_tool,
             session_id,
             abort_signal: options.abort_signal.unwrap_or_default(),
+            shell_binary: options.shell_binary,
         })
     }
 
@@ -272,6 +277,7 @@ impl Agent {
         let registry = std::sync::Arc::new(self.registry_snapshot());
         let can_use_tool = self.can_use_tool.clone();
         let abort_signal = self.abort_signal.clone();
+        let shell_binary = self.shell_binary.clone();
 
         let handle = tokio::spawn(async move {
             let result: Result<Vec<Message>, String> = super::r#loop::run_loop(
@@ -289,6 +295,7 @@ impl Agent {
                 max_tokens,
                 can_use_tool.as_ref(),
                 abort_signal,
+                shell_binary,
                 tx.clone(),
             )
             .await;

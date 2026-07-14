@@ -24,9 +24,10 @@ pub(crate) async fn run_loop(
     max_tokens: Option<u64>,
     can_use_tool: Option<&CanUseToolFn>,
     abort_signal: CancellationToken,
+    shell_binary: Option<String>,
     tx: mpsc::Sender<SDKMessage>,
 ) -> Result<Vec<Message>, String> {
-    let tool_context = ToolUseContext::with_abort(cwd.to_string(), abort_signal);
+    let tool_context = ToolUseContext::with_shell(cwd.to_string(), abort_signal, shell_binary);
 
     // Build system prompt blocks
     let system_blocks =

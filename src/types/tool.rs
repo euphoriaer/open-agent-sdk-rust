@@ -102,6 +102,8 @@ pub struct ToolUseContext {
     pub working_dir: String,
     pub abort_signal: tokio_util::sync::CancellationToken,
     pub read_file_state: Arc<RwLock<HashMap<String, String>>>,
+    /// Override shell binary path (e.g. bash.exe). None uses PATH auto-detection.
+    pub shell_binary: Option<String>,
 }
 
 impl ToolUseContext {
@@ -117,6 +119,20 @@ impl ToolUseContext {
             working_dir,
             abort_signal,
             read_file_state: Arc::new(RwLock::new(HashMap::new())),
+            shell_binary: None,
+        }
+    }
+
+    pub fn with_shell(
+        working_dir: String,
+        abort_signal: tokio_util::sync::CancellationToken,
+        shell_binary: Option<String>,
+    ) -> Self {
+        Self {
+            working_dir,
+            abort_signal,
+            read_file_state: Arc::new(RwLock::new(HashMap::new())),
+            shell_binary,
         }
     }
 }

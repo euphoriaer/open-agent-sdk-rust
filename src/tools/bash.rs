@@ -117,7 +117,7 @@ impl Tool for BashTool {
 
         let output = tokio::time::timeout(
             std::time::Duration::from_millis(timeout_ms),
-            run_command(command, &context.working_dir),
+            run_command(command, &context.working_dir, context.shell_binary.as_deref()),
         )
         .await;
 
@@ -167,9 +167,10 @@ impl Tool for BashTool {
 async fn run_command(
     command: &str,
     working_dir: &str,
+    shell_override: Option<&str>,
 ) -> Result<(String, String, i32), std::io::Error> {
     let shell_path = crate::mcp::shell_path::get_shell_path();
-    let shell = build_shell_runner(command);
+    let shell = build_shell_runner(command, shell_override);
     let mut cmd = Command::new(&shell.program);
     cmd.args(&shell.args)
         .current_dir(working_dir)
@@ -193,7 +194,15 @@ struct ShellRunner {
     args: Vec<String>,
 }
 
-fn build_shell_runner(command: &str) -> ShellRunner {
+fn build_shell_runner(command: &str, shell_override: Option<&str>) -> ShellRunner {
+    if let Some(shell) = shell_override {
+        if !shell.is_empty() && std::path::Path::new(shell).is_file() {
+            return ShellRunner {
+                program: shell.to_string(),
+                args: vec!["-c".to_string(), command.to_string()],
+            };
+        }
+    }
     select_shell_runner(
         command,
         cfg!(windows),
