@@ -54,6 +54,11 @@ pub async fn run_command(
     description: Option<&str>,
     tool_use_id: Option<&str>,
 ) -> Result<CmdOutput, String> {
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
     let mut child = cmd
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -267,10 +272,13 @@ async fn kill_child(child: &mut tokio::process::Child) {
         // not grandchild processes (e.g. git.exe). Use taskkill /T to kill the
         // entire process tree.
         if let Some(pid) = child.id() {
-            let _ = tokio::process::Command::new("taskkill")
-                .args(&["/F", "/T", "/PID", &pid.to_string()])
-                .output()
-                .await;
+            let mut kill_cmd = tokio::process::Command::new("taskkill");
+            kill_cmd.args(&["/F", "/T", "/PID", &pid.to_string()]);
+            #[cfg(windows)]
+            {
+                kill_cmd.creation_flags(0x08000000);
+            }
+            let _ = kill_cmd.output().await;
         }
     }
     let _ = child.kill().await;

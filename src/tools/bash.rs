@@ -105,10 +105,6 @@ impl Tool for BashTool {
         let mut cmd = Command::new(&shell.program);
         cmd.args(&shell.args)
             .current_dir(&context.working_dir);
-        #[cfg(windows)]
-        {
-            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
 
         let description = input
             .get("description")
