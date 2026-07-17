@@ -113,6 +113,10 @@ impl Tool for BashTool {
         let shell = build_shell_runner(command, context.shell_binary.as_deref());
         let mut cmd = Command::new(&shell.program);
         cmd.args(&shell.args).current_dir(&context.working_dir);
+        let shell_path = crate::mcp::shell_path::get_shell_path();
+        if !shell_path.is_empty() {
+            cmd.env("PATH", shell_path);
+        }
         let description = input.get("description").and_then(|d| d.as_str());
         let timeout_ms = input
             .get("timeout")
@@ -149,7 +153,7 @@ impl Tool for BashTool {
                 }
 
                 if result.len() > MAX_OUTPUT_SIZE {
-                    result.truncate(MAX_OUTPUT_SIZE);
+                    truncate_utf8(&mut result, MAX_OUTPUT_SIZE);
                     result.push_str("\n... (output truncated)");
                 }
 
@@ -170,6 +174,18 @@ impl Tool for BashTool {
             Err(e) => Ok(ToolResult::error(format!("Command failed: {}", e))),
         }
     }
+}
+
+fn truncate_utf8(value: &mut String, max_bytes: usize) {
+    if value.len() <= max_bytes {
+        return;
+    }
+
+    let mut boundary = max_bytes;
+    while !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    value.truncate(boundary);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -316,7 +332,17 @@ fn check_destructive(command: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{select_shell_runner, try_shell_override, ShellRunner};
+    use super::{select_shell_runner, truncate_utf8, try_shell_override, ShellRunner};
+
+    #[test]
+    fn output_truncation_preserves_utf8_boundaries() {
+        let mut output = "你".repeat(40_000);
+
+        truncate_utf8(&mut output, 100_000);
+
+        assert!(output.len() <= 100_000);
+        assert!(output.ends_with('你'));
+    }
 
     #[test]
     fn shell_override_uses_configured_binary_when_it_exists() {

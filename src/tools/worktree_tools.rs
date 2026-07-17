@@ -237,6 +237,7 @@ impl Tool for ExitWorktreeTool {
             None => return Ok(ToolResult::error(format!("Worktree not found: {}", id))),
         };
 
+        let mut branch_cleanup_warning = None;
         if action == "remove" {
             // Remove worktree
             let mut remove_cmd = Command::new("git");
@@ -256,18 +257,18 @@ impl Tool for ExitWorktreeTool {
             )
             .await;
 
-            if let Ok(out) = result {
-                if out.exit_code != 0 {
-                    return Ok(ToolResult::error(format!("Error: {}", out.stderr)));
-                }
+            match result {
+                Ok(out) if out.exit_code == 0 => {}
+                Ok(out) => return Ok(ToolResult::error(format!("Error: {}", out.stderr))),
+                Err(error) => return Ok(ToolResult::error(format!("Error: {}", error))),
             }
 
-            // Try to delete the branch (ignore errors)
+            // The worktree is already removed at this point; report branch cleanup separately.
             let mut branch_cmd = Command::new("git");
             branch_cmd
                 .args(["branch", "-D", &worktree.branch])
                 .current_dir(&worktree.original_cwd);
-            let _ = command_runner::run_command(
+            let branch_result = command_runner::run_command(
                 &mut branch_cmd,
                 &context.abort_signal,
                 command_runner::CommandRunOptions {
@@ -279,11 +280,16 @@ impl Tool for ExitWorktreeTool {
                 },
             )
             .await;
+            match branch_result {
+                Ok(out) if out.exit_code == 0 => {}
+                Ok(out) => branch_cleanup_warning = Some(out.stderr),
+                Err(error) => branch_cleanup_warning = Some(error),
+            }
         }
 
         store.remove(id);
 
-        Ok(ToolResult::text(format!(
+        let mut message = format!(
             "Worktree {}: {}",
             if action == "remove" {
                 "removed"
@@ -291,6 +297,10 @@ impl Tool for ExitWorktreeTool {
                 "kept"
             },
             worktree.path
-        )))
+        );
+        if let Some(warning) = branch_cleanup_warning {
+            message.push_str(&format!("\nBranch cleanup warning: {}", warning));
+        }
+        Ok(ToolResult::text(message))
     }
 }

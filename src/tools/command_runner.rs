@@ -37,6 +37,16 @@ const USER_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 const STALL_THRESHOLD: Duration = Duration::from_secs(90);
 const LAST_OUTPUT_CHARS: usize = 500;
 const OUTPUT_THROTTLE_MS: u64 = 200;
+const MAX_CAPTURE_BYTES: usize = 200_000;
+
+fn append_capped(buffer: &mut Vec<u8>, data: &[u8]) -> bool {
+    let remaining = MAX_CAPTURE_BYTES.saturating_sub(buffer.len());
+    if remaining == 0 {
+        return false;
+    }
+    buffer.extend_from_slice(&data[..data.len().min(remaining)]);
+    true
+}
 
 fn truncate_with_ellipsis(value: &str, max_chars: usize) -> String {
     let char_count = value.chars().count();
@@ -83,26 +93,30 @@ fn normalized_stream_output(stdout: &[u8], stderr: &[u8]) -> String {
     output
 }
 
-async fn clear_status(event_sender: Option<&mpsc::Sender<SDKMessage>>) {
+fn clear_status(event_sender: Option<&mpsc::Sender<SDKMessage>>) {
     if let Some(sender) = event_sender {
-        if sender
-            .send(SDKMessage::Status {
+        send_event(
+            sender,
+            SDKMessage::Status {
                 message: String::new(),
-            })
-            .await
-            .is_err()
-        {
-            tracing::debug!("status receiver dropped before command completion");
-        }
+            },
+            "status_clear",
+        );
     }
 }
 
-async fn send_event(sender: &mpsc::Sender<SDKMessage>, message: SDKMessage, event_name: &str) {
-    if sender.send(message).await.is_err() {
-        tracing::debug!(
-            event_name,
-            "event receiver dropped during command execution"
-        );
+fn send_event(sender: &mpsc::Sender<SDKMessage>, message: SDKMessage, event_name: &str) {
+    match sender.try_send(message) {
+        Ok(()) => {}
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            tracing::debug!(event_name, "event channel full; dropping command update");
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            tracing::debug!(
+                event_name,
+                "event receiver dropped during command execution"
+            );
+        }
     }
 }
 
@@ -144,6 +158,11 @@ pub async fn run_command(
         description,
         tool_use_id,
     } = options;
+
+    if abort_signal.is_cancelled() {
+        clear_status(event_sender);
+        return Err(format!("{} aborted", tool_name));
+    }
 
     #[cfg(windows)]
     {
@@ -254,21 +273,27 @@ pub async fn run_command(
 
     let status = loop {
         tokio::select! {
+            biased;
+            _ = abort_signal.cancelled() => {
+                kill_child(&mut child).await;
+                clear_status(event_sender);
+                return Err(format!("{} aborted", tool_name));
+            }
             chunk = chunk_rx.recv() => {
                 match chunk {
                     Some(PipeMessage::Data { is_stdout, data }) => {
-                        if is_stdout {
-                            stdout_bytes.extend_from_slice(&data);
+                        let output_changed = if is_stdout {
+                            append_capped(&mut stdout_bytes, &data)
                         } else {
-                            stderr_bytes.extend_from_slice(&data);
-                        }
+                            append_capped(&mut stderr_bytes, &data)
+                        };
                         last_data_time = Instant::now();
 
                         // Throttled real-time output streaming
                         if let Some(ref sender) = event_sender {
                             if let Some(ref tuid) = tool_use_id {
                                 let now = Instant::now();
-                                if now.duration_since(last_output_time).as_millis() as u64 >= OUTPUT_THROTTLE_MS {
+                                if output_changed && now.duration_since(last_output_time).as_millis() as u64 >= OUTPUT_THROTTLE_MS {
                                     last_output_time = now;
                                     let partial = normalized_stream_output(
                                         &stdout_bytes,
@@ -282,14 +307,14 @@ pub async fn run_command(
                                             content: partial,
                                         },
                                         "tool_output",
-                                    ).await;
+                                    );
                                 }
                             }
                         }
                     }
                     Some(PipeMessage::ReadError { stream, error }) => {
                         kill_child(&mut child).await;
-                        clear_status(event_sender).await;
+                        clear_status(event_sender);
                         return Err(format!("Failed to read {} from {}: {}", stream, tool_name, error));
                     }
                     None => {
@@ -297,17 +322,12 @@ pub async fn run_command(
                         match child.wait().await {
                             Ok(status) => break status,
                             Err(error) => {
-                                clear_status(event_sender).await;
+                                clear_status(event_sender);
                                 return Err(format!("Failed to wait for {}: {}", tool_name, error));
                             }
                         }
                     }
                 }
-            }
-            _ = abort_signal.cancelled() => {
-                kill_child(&mut child).await;
-                clear_status(event_sender).await;
-                return Err(format!("{} aborted", tool_name));
             }
             _ = user_heartbeat_ticker.tick() => {
                 // Fast user-facing status bar update (1s)
@@ -326,7 +346,7 @@ pub async fn run_command(
                     } else {
                         format!("{}({})--运行中...", desc, format_elapsed(elapsed))
                     };
-                    send_event(sender, SDKMessage::Status { message: msg }, "status").await;
+                    send_event(sender, SDKMessage::Status { message: msg }, "status");
                 }
             }
             _ = ai_heartbeat_ticker.tick() => {
@@ -350,7 +370,7 @@ pub async fn run_command(
                         "[{}]{} 运行中 ({}s) — 累积 {}KB\n{}{}",
                         tool_name, desc, elapsed, total_bytes / 1024, preview, stalled_warn,
                     );
-                    send_event(sender, SDKMessage::Progress { message: msg }, "progress").await;
+                    send_event(sender, SDKMessage::Progress { message: msg }, "progress");
                 }
             }
             _ = async {
@@ -360,7 +380,7 @@ pub async fn run_command(
                 }
             } => {
                 kill_child(&mut child).await;
-                clear_status(event_sender).await;
+                clear_status(event_sender);
                 let elapsed = start.elapsed().as_secs();
                 return Err(format!("{} timed out after {}s", tool_name, elapsed));
             }
@@ -379,11 +399,10 @@ pub async fn run_command(
                     content: full,
                 },
                 "tool_output",
-            )
-            .await;
+            );
         }
     }
-    clear_status(event_sender).await;
+    clear_status(event_sender);
 
     let exit_code = status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&stdout_bytes)

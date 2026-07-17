@@ -174,13 +174,13 @@ impl Tool for GrepTool {
 
                 Ok(ToolResult::text(result))
             }
-            Err(_) => {
+            Err(rg_error) => {
                 // Fall back to grep
                 let result = run_search(
                     "grep",
                     &build_grep_args(pattern, search_path, output_mode, &input),
                     &context,
-                    false, // grep exit code 1 = no matches
+                    true, // grep uses exit code 1 for no matches
                 )
                 .await;
 
@@ -192,7 +192,10 @@ impl Tool for GrepTool {
                             Ok(ToolResult::text(output))
                         }
                     }
-                    Err(e) => Ok(ToolResult::error(format!("Search failed: {}", e))),
+                    Err(grep_error) => Ok(ToolResult::error(format!(
+                        "Search failed: rg: {}; grep: {}",
+                        rg_error, grep_error
+                    ))),
                 }
             }
         }

@@ -142,6 +142,14 @@ impl ToolUseContext {
         working_dir: String,
         abort_signal: tokio_util::sync::CancellationToken,
         shell_binary: Option<String>,
+    ) -> Self {
+        Self::with_shell_and_events(working_dir, abort_signal, shell_binary, None)
+    }
+
+    pub fn with_shell_and_events(
+        working_dir: String,
+        abort_signal: tokio_util::sync::CancellationToken,
+        shell_binary: Option<String>,
         event_sender: Option<mpsc::Sender<SDKMessage>>,
     ) -> Self {
         Self {

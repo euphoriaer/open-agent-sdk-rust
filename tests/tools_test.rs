@@ -1,5 +1,5 @@
 use open_agent_sdk::tools::ToolRegistry;
-use open_agent_sdk::types::{SDKMessage, Tool, ToolUseContext};
+use open_agent_sdk::types::{SDKMessage, Tool, ToolError, ToolUseContext};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -164,6 +164,32 @@ async fn test_bash_timeout_clears_status() {
 }
 
 #[tokio::test]
+async fn test_bash_does_not_block_when_event_channel_is_full() {
+    open_agent_sdk::mcp::shell_path::get_shell_path();
+    let registry = ToolRegistry::default_registry();
+    let bash = registry.get("Bash").unwrap();
+    let mut ctx = create_test_context("/tmp");
+    let (event_sender, _event_receiver) = tokio::sync::mpsc::channel(1);
+    event_sender
+        .try_send(SDKMessage::Status {
+            message: "occupied".to_string(),
+        })
+        .unwrap();
+    ctx.event_sender = Some(event_sender);
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        bash.call(json!({"command": "sleep 5", "timeout": 20}), &ctx),
+    )
+    .await
+    .expect("a full event channel must not block command timeout")
+    .unwrap();
+
+    assert!(result.is_error);
+    assert!(result.get_text().contains("timed out"));
+}
+
+#[tokio::test]
 async fn test_bash_streams_long_unicode_status() {
     let registry = ToolRegistry::default_registry();
     let bash = registry.get("Bash").unwrap();
@@ -232,6 +258,32 @@ async fn test_bash_exit_code() {
 
     assert!(result.is_error);
     assert!(result.get_text().contains("Exit code:"));
+}
+
+#[tokio::test]
+async fn test_lsp_search_honors_cancellation() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("main.rs"), "fn target() {}\n").unwrap();
+    let cancellation = tokio_util::sync::CancellationToken::new();
+    cancellation.cancel();
+    let ctx = ToolUseContext::with_abort(temp.path().to_string_lossy().to_string(), cancellation);
+    let registry = ToolRegistry::default_registry();
+    let lsp = registry.get("LSP").unwrap();
+
+    let error = lsp
+        .call(
+            json!({
+                "operation": "findReferences",
+                "file_path": "main.rs",
+                "line": 0,
+                "character": 4
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, ToolError::ExecutionError(message) if message.contains("aborted")));
 }
 
 #[tokio::test]
