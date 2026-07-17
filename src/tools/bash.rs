@@ -7,6 +7,8 @@ use tokio::process::Command;
 use crate::tools::command_runner;
 use crate::types::{Tool, ToolError, ToolInputSchema, ToolResult, ToolUseContext};
 
+const DEFAULT_TIMEOUT_MS: u64 = 120_000;
+const MAX_TIMEOUT_MS: u64 = 600_000;
 const MAX_OUTPUT_SIZE: usize = 100_000;
 
 /// Destructive command patterns that should be flagged.
@@ -46,6 +48,13 @@ impl Tool for BashTool {
                     json!({
                         "type": "string",
                         "description": "The command to execute"
+                    }),
+                ),
+                (
+                    "timeout".to_string(),
+                    json!({
+                        "type": "number",
+                        "description": "Optional timeout in milliseconds (max 600000)"
                     }),
                 ),
                 (
@@ -103,25 +112,24 @@ impl Tool for BashTool {
         // Build shell command
         let shell = build_shell_runner(command, context.shell_binary.as_deref());
         let mut cmd = Command::new(&shell.program);
-        cmd.args(&shell.args)
-            .current_dir(&context.working_dir);
-        #[cfg(windows)]
-        {
-            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
-
-        let description = input
-            .get("description")
-            .and_then(|d| d.as_str());
+        cmd.args(&shell.args).current_dir(&context.working_dir);
+        let description = input.get("description").and_then(|d| d.as_str());
+        let timeout_ms = input
+            .get("timeout")
+            .and_then(|t| t.as_u64())
+            .unwrap_or(DEFAULT_TIMEOUT_MS)
+            .min(MAX_TIMEOUT_MS);
 
         let output = command_runner::run_command(
             &mut cmd,
             &context.abort_signal,
-            None, // no hard timeout — use heartbeat + cancel instead
-            context.event_sender.as_ref(),
-            "Bash",
-            description,
-            context.tool_use_id.as_deref(),
+            command_runner::CommandRunOptions {
+                timeout: Some(std::time::Duration::from_millis(timeout_ms)),
+                event_sender: context.event_sender.as_ref(),
+                tool_name: "Bash",
+                description,
+                tool_use_id: context.tool_use_id.as_deref(),
+            },
         )
         .await;
 

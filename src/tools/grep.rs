@@ -206,17 +206,18 @@ async fn run_search(
     no_match_is_ok: bool,
 ) -> Result<String, String> {
     let mut cmd = Command::new(binary);
-    cmd.args(args)
-        .current_dir("."); // path is already in args
+    cmd.args(args).current_dir("."); // path is already in args
 
     let output = command_runner::run_command(
         &mut cmd,
         &context.abort_signal,
-        None,  // no hard timeout — user cancels if too long
-        context.event_sender.as_ref(),
-        binary,
-        Some("搜索中"),
-        context.tool_use_id.as_deref(),
+        command_runner::CommandRunOptions {
+            timeout: None, // no hard timeout — user cancels if too long
+            event_sender: context.event_sender.as_ref(),
+            tool_name: binary,
+            description: Some("搜索中"),
+            tool_use_id: context.tool_use_id.as_deref(),
+        },
     )
     .await?;
 

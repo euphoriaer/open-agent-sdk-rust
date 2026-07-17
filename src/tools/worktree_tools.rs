@@ -74,11 +74,13 @@ impl Tool for EnterWorktreeTool {
         let check = command_runner::run_command(
             &mut check_cmd,
             &context.abort_signal,
-            Some(std::time::Duration::from_secs(10)),
-            None,
-            "EnterWorktree",
-            None,
-            context.tool_use_id.as_deref(),
+            command_runner::CommandRunOptions {
+                timeout: Some(std::time::Duration::from_secs(10)),
+                event_sender: None,
+                tool_name: "EnterWorktree",
+                description: None,
+                tool_use_id: context.tool_use_id.as_deref(),
+            },
         )
         .await;
 
@@ -115,11 +117,13 @@ impl Tool for EnterWorktreeTool {
         let _ = command_runner::run_command(
             &mut branch_cmd,
             &context.abort_signal,
-            Some(std::time::Duration::from_secs(10)),
-            None,
-            "EnterWorktree",
-            None,
-            context.tool_use_id.as_deref(),
+            command_runner::CommandRunOptions {
+                timeout: Some(std::time::Duration::from_secs(10)),
+                event_sender: None,
+                tool_name: "EnterWorktree",
+                description: None,
+                tool_use_id: context.tool_use_id.as_deref(),
+            },
         )
         .await;
 
@@ -131,11 +135,13 @@ impl Tool for EnterWorktreeTool {
         let result = command_runner::run_command(
             &mut add_cmd,
             &context.abort_signal,
-            Some(std::time::Duration::from_secs(10)),
-            None,
-            "EnterWorktree",
-            None,
-            context.tool_use_id.as_deref(),
+            command_runner::CommandRunOptions {
+                timeout: Some(std::time::Duration::from_secs(10)),
+                event_sender: None,
+                tool_name: "EnterWorktree",
+                description: None,
+                tool_use_id: context.tool_use_id.as_deref(),
+            },
         )
         .await;
 
@@ -163,10 +169,7 @@ impl Tool for EnterWorktreeTool {
                     stderr
                 )))
             }
-            Err(e) => Ok(ToolResult::error(format!(
-                "Error creating worktree: {}",
-                e
-            ))),
+            Err(e) => Ok(ToolResult::error(format!("Error creating worktree: {}", e))),
         }
     }
 }
@@ -243,11 +246,13 @@ impl Tool for ExitWorktreeTool {
             let result = command_runner::run_command(
                 &mut remove_cmd,
                 &context.abort_signal,
-                Some(std::time::Duration::from_secs(10)),
-                None,
-                "ExitWorktree",
-                None,
-                context.tool_use_id.as_deref(),
+                command_runner::CommandRunOptions {
+                    timeout: Some(std::time::Duration::from_secs(10)),
+                    event_sender: None,
+                    tool_name: "ExitWorktree",
+                    description: None,
+                    tool_use_id: context.tool_use_id.as_deref(),
+                },
             )
             .await;
 
@@ -265,11 +270,13 @@ impl Tool for ExitWorktreeTool {
             let _ = command_runner::run_command(
                 &mut branch_cmd,
                 &context.abort_signal,
-                Some(std::time::Duration::from_secs(10)),
-                None,
-                "ExitWorktree",
-                None,
-                context.tool_use_id.as_deref(),
+                command_runner::CommandRunOptions {
+                    timeout: Some(std::time::Duration::from_secs(10)),
+                    event_sender: None,
+                    tool_name: "ExitWorktree",
+                    description: None,
+                    tool_use_id: context.tool_use_id.as_deref(),
+                },
             )
             .await;
         }

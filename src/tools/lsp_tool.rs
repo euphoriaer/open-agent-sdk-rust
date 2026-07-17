@@ -191,18 +191,25 @@ async fn run_rg_or_grep(pattern: &str, cwd: &str) -> String {
     // Try ripgrep first
     let mut cmd = Command::new("rg");
     cmd.args([
-            "-n", pattern, "--type-add", "src:*.{ts,tsx,js,jsx,py,go,rs,java}", "-t", "src",
-        ])
-        .arg(cwd);
+        "-n",
+        pattern,
+        "--type-add",
+        "src:*.{ts,tsx,js,jsx,py,go,rs,java}",
+        "-t",
+        "src",
+    ])
+    .arg(cwd);
 
     if let Ok(out) = command_runner::run_command(
         &mut cmd,
         &tokio_util::sync::CancellationToken::new(),
-        Some(std::time::Duration::from_secs(10)),
-        None,
-        "rg",
-        None,
-        None,
+        command_runner::CommandRunOptions {
+            timeout: Some(std::time::Duration::from_secs(10)),
+            event_sender: None,
+            tool_name: "rg",
+            description: None,
+            tool_use_id: None,
+        },
     )
     .await
     {
@@ -215,18 +222,26 @@ async fn run_rg_or_grep(pattern: &str, cwd: &str) -> String {
     // Fallback to grep
     let mut cmd = Command::new("grep");
     cmd.args([
-            "-rn", pattern, cwd, "--include=*.rs", "--include=*.ts", "--include=*.py",
-            "--include=*.go", "--include=*.java",
-        ]);
+        "-rn",
+        pattern,
+        cwd,
+        "--include=*.rs",
+        "--include=*.ts",
+        "--include=*.py",
+        "--include=*.go",
+        "--include=*.java",
+    ]);
 
     if let Ok(out) = command_runner::run_command(
         &mut cmd,
         &tokio_util::sync::CancellationToken::new(),
-        Some(std::time::Duration::from_secs(10)),
-        None,
-        "grep",
-        None,
-        None,
+        command_runner::CommandRunOptions {
+            timeout: Some(std::time::Duration::from_secs(10)),
+            event_sender: None,
+            tool_name: "grep",
+            description: None,
+            tool_use_id: None,
+        },
     )
     .await
     {
@@ -250,11 +265,13 @@ async fn run_rg_on_file(pattern: &str, file_path: &str, cwd: &str) -> String {
     if let Ok(out) = command_runner::run_command(
         &mut cmd,
         &tokio_util::sync::CancellationToken::new(),
-        Some(std::time::Duration::from_secs(10)),
-        None,
-        "rg",
-        None,
-        None,
+        command_runner::CommandRunOptions {
+            timeout: Some(std::time::Duration::from_secs(10)),
+            event_sender: None,
+            tool_name: "rg",
+            description: None,
+            tool_use_id: None,
+        },
     )
     .await
     {
@@ -269,11 +286,13 @@ async fn run_rg_on_file(pattern: &str, file_path: &str, cwd: &str) -> String {
     if let Ok(out) = command_runner::run_command(
         &mut cmd,
         &tokio_util::sync::CancellationToken::new(),
-        Some(std::time::Duration::from_secs(10)),
-        None,
-        "grep",
-        None,
-        None,
+        command_runner::CommandRunOptions {
+            timeout: Some(std::time::Duration::from_secs(10)),
+            event_sender: None,
+            tool_name: "grep",
+            description: None,
+            tool_use_id: None,
+        },
     )
     .await
     {

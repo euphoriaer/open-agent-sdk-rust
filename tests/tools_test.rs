@@ -1,15 +1,10 @@
 use open_agent_sdk::tools::ToolRegistry;
-use open_agent_sdk::types::{Tool, ToolUseContext};
+use open_agent_sdk::types::{SDKMessage, Tool, ToolUseContext};
 use serde_json::json;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 fn create_test_context(dir: &str) -> ToolUseContext {
-    ToolUseContext {
-        working_dir: dir.to_string(),
-        abort_signal: tokio_util::sync::CancellationToken::new(),
-        read_file_state: Arc::new(RwLock::new(std::collections::HashMap::new())),
-    }
+    ToolUseContext::new(dir.to_string())
 }
 
 // --- Registry Tests ---
@@ -109,6 +104,14 @@ fn test_registry_remove() {
 
 // --- Bash Tool Tests ---
 
+#[test]
+fn test_bash_schema_supports_timeout() {
+    let registry = ToolRegistry::default_registry();
+    let bash = registry.get("Bash").unwrap();
+
+    assert!(bash.input_schema().properties.contains_key("timeout"));
+}
+
 #[tokio::test]
 async fn test_bash_echo() {
     let registry = ToolRegistry::default_registry();
@@ -122,6 +125,101 @@ async fn test_bash_echo() {
 
     assert!(!result.is_error);
     assert!(result.get_text().contains("hello world"));
+}
+
+#[tokio::test]
+async fn test_bash_timeout() {
+    let registry = ToolRegistry::default_registry();
+    let bash = registry.get("Bash").unwrap();
+    let ctx = create_test_context("/tmp");
+
+    let result = bash
+        .call(json!({"command": "sleep 5", "timeout": 20}), &ctx)
+        .await
+        .unwrap();
+
+    assert!(result.is_error);
+    assert!(result.get_text().contains("timed out"));
+}
+
+#[tokio::test]
+async fn test_bash_timeout_clears_status() {
+    let registry = ToolRegistry::default_registry();
+    let bash = registry.get("Bash").unwrap();
+    let mut ctx = create_test_context("/tmp");
+    let (event_sender, mut event_receiver) = tokio::sync::mpsc::channel(16);
+    ctx.event_sender = Some(event_sender);
+
+    let result = bash
+        .call(json!({"command": "sleep 5", "timeout": 20}), &ctx)
+        .await
+        .unwrap();
+
+    assert!(result.is_error);
+    assert!(
+        std::iter::from_fn(|| event_receiver.try_recv().ok()).any(|message| {
+            matches!(message, SDKMessage::Status { message } if message.is_empty())
+        })
+    );
+}
+
+#[tokio::test]
+async fn test_bash_streams_long_unicode_status() {
+    let registry = ToolRegistry::default_registry();
+    let bash = registry.get("Bash").unwrap();
+    let mut ctx = create_test_context("/tmp");
+    let (event_sender, mut event_receiver) = tokio::sync::mpsc::channel(16);
+    ctx.event_sender = Some(event_sender);
+    ctx.tool_use_id = Some("unicode-status".to_string());
+
+    let result = bash
+        .call(
+            json!({
+                "command": "printf '你好你好你好你好你好你好你好你好你好你好你好你好你好你好你好你好你好你好你好你好你好你好你好你好你好你好你好你好你好你好'; sleep 2",
+                "timeout": 5000
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.is_error);
+    let statuses: Vec<String> = std::iter::from_fn(|| event_receiver.try_recv().ok())
+        .filter_map(|message| match message {
+            SDKMessage::Status { message } if !message.is_empty() => Some(message),
+            _ => None,
+        })
+        .collect();
+    assert!(statuses.iter().any(|message| message.ends_with("...")));
+}
+
+#[tokio::test]
+async fn test_bash_streams_stderr_output() {
+    let registry = ToolRegistry::default_registry();
+    let bash = registry.get("Bash").unwrap();
+    let mut ctx = create_test_context("/tmp");
+    let (event_sender, mut event_receiver) = tokio::sync::mpsc::channel(16);
+    ctx.event_sender = Some(event_sender);
+    ctx.tool_use_id = Some("stderr-output".to_string());
+
+    let result = bash
+        .call(
+            json!({"command": "printf 'streamed error' >&2", "timeout": 5000}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.is_error);
+    let streamed_output: Vec<String> = std::iter::from_fn(|| event_receiver.try_recv().ok())
+        .filter_map(|message| match message {
+            SDKMessage::ToolOutput { content, .. } => Some(content),
+            _ => None,
+        })
+        .collect();
+    assert!(streamed_output
+        .iter()
+        .any(|content| content.contains("streamed error")));
 }
 
 #[tokio::test]
