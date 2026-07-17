@@ -27,7 +27,7 @@ pub(crate) async fn run_loop(
     shell_binary: Option<String>,
     tx: mpsc::Sender<SDKMessage>,
 ) -> Result<Vec<Message>, String> {
-    let tool_context = ToolUseContext::with_shell(cwd.to_string(), abort_signal, shell_binary);
+    let tool_context = ToolUseContext::with_shell(cwd.to_string(), abort_signal, shell_binary, Some(tx.clone()));
 
     // Build system prompt blocks
     let system_blocks =

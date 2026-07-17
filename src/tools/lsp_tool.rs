@@ -2,8 +2,9 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
+use tokio::process::Command;
 
+use crate::tools::command_runner;
 use crate::types::{Tool, ToolError, ToolInputSchema, ToolResult, ToolUseContext};
 
 /// LSPTool - Language Server Protocol integration.
@@ -86,7 +87,7 @@ impl Tool for LSPTool {
                             r"(?:fn |struct |enum |trait |type |const |let |pub fn |pub struct |pub enum |pub trait |pub type |pub const |impl |mod |use )\s*{}",
                             regex::escape(&sym)
                         );
-                        let result = run_rg_or_grep(&pattern, cwd);
+                        let result = run_rg_or_grep(&pattern, cwd).await;
                         if result.is_empty() {
                             Ok(ToolResult::text(format!("No definition found for \"{}\"", sym)))
                         } else {
@@ -106,7 +107,7 @@ impl Tool for LSPTool {
                 let symbol = get_symbol_at_position(file_path, line as usize, character as usize, cwd);
                 match symbol {
                     Some(sym) => {
-                        let result = run_rg_or_grep(&regex::escape(&sym), cwd);
+                        let result = run_rg_or_grep(&regex::escape(&sym), cwd).await;
                         if result.is_empty() {
                             Ok(ToolResult::text(format!("No references found for \"{}\"", sym)))
                         } else {
@@ -126,7 +127,7 @@ impl Tool for LSPTool {
                     .ok_or_else(|| ToolError::InvalidInput("file_path required".to_string()))?;
 
                 let pattern = r"^\s*(pub\s+)?(fn |struct |enum |trait |type |const |let |impl |mod |use )";
-                let result = run_rg_on_file(pattern, file_path, cwd);
+                let result = run_rg_on_file(pattern, file_path, cwd).await;
                 if result.is_empty() {
                     Ok(ToolResult::text("No symbols found"))
                 } else {
@@ -186,29 +187,51 @@ fn is_word_char(b: u8) -> bool {
 }
 
 /// Run ripgrep on the working directory, falling back to grep.
-fn run_rg_or_grep(pattern: &str, cwd: &str) -> String {
+async fn run_rg_or_grep(pattern: &str, cwd: &str) -> String {
     // Try ripgrep first
-    if let Ok(output) = Command::new("rg")
-        .args(["-n", pattern, "--type-add", "src:*.{ts,tsx,js,jsx,py,go,rs,java}", "-t", "src"])
-        .arg(cwd)
-        .output()
+    let mut cmd = Command::new("rg");
+    cmd.args([
+            "-n", pattern, "--type-add", "src:*.{ts,tsx,js,jsx,py,go,rs,java}", "-t", "src",
+        ])
+        .arg(cwd);
+
+    if let Ok(out) = command_runner::run_command(
+        &mut cmd,
+        &tokio_util::sync::CancellationToken::new(),
+        Some(std::time::Duration::from_secs(10)),
+        None,
+        "rg",
+        None,
+        None,
+    )
+    .await
     {
-        if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout);
-            // Limit output to 50 lines
-            let lines: Vec<&str> = text.lines().take(50).collect();
+        if out.exit_code == 0 {
+            let lines: Vec<&str> = out.stdout.lines().take(50).collect();
             return lines.join("\n");
         }
     }
 
     // Fallback to grep
-    if let Ok(output) = Command::new("grep")
-        .args(["-rn", pattern, cwd, "--include=*.rs", "--include=*.ts", "--include=*.py", "--include=*.go", "--include=*.java"])
-        .output()
+    let mut cmd = Command::new("grep");
+    cmd.args([
+            "-rn", pattern, cwd, "--include=*.rs", "--include=*.ts", "--include=*.py",
+            "--include=*.go", "--include=*.java",
+        ]);
+
+    if let Ok(out) = command_runner::run_command(
+        &mut cmd,
+        &tokio_util::sync::CancellationToken::new(),
+        Some(std::time::Duration::from_secs(10)),
+        None,
+        "grep",
+        None,
+        None,
+    )
+    .await
     {
-        if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout);
-            let lines: Vec<&str> = text.lines().take(50).collect();
+        if out.exit_code == 0 {
+            let lines: Vec<&str> = out.stdout.lines().take(50).collect();
             return lines.join("\n");
         }
     }
@@ -217,27 +240,45 @@ fn run_rg_or_grep(pattern: &str, cwd: &str) -> String {
 }
 
 /// Run ripgrep on a single file, falling back to grep.
-fn run_rg_on_file(pattern: &str, file_path: &str, cwd: &str) -> String {
+async fn run_rg_on_file(pattern: &str, file_path: &str, cwd: &str) -> String {
     let full_path = Path::new(cwd).join(file_path);
-    let path_str = full_path.to_string_lossy();
+    let path_str = full_path.to_string_lossy().to_string();
 
-    if let Ok(output) = Command::new("rg")
-        .args(["-n", pattern])
-        .arg(path_str.as_ref())
-        .output()
+    let mut cmd = Command::new("rg");
+    cmd.args(["-n", pattern]).arg(&path_str);
+
+    if let Ok(out) = command_runner::run_command(
+        &mut cmd,
+        &tokio_util::sync::CancellationToken::new(),
+        Some(std::time::Duration::from_secs(10)),
+        None,
+        "rg",
+        None,
+        None,
+    )
+    .await
     {
-        if output.status.success() {
-            return String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if out.exit_code == 0 {
+            return out.stdout.trim().to_string();
         }
     }
 
-    if let Ok(output) = Command::new("grep")
-        .args(["-n", pattern])
-        .arg(path_str.as_ref())
-        .output()
+    let mut cmd = Command::new("grep");
+    cmd.args(["-n", pattern]).arg(&path_str);
+
+    if let Ok(out) = command_runner::run_command(
+        &mut cmd,
+        &tokio_util::sync::CancellationToken::new(),
+        Some(std::time::Duration::from_secs(10)),
+        None,
+        "grep",
+        None,
+        None,
+    )
+    .await
     {
-        if output.status.success() {
-            return String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if out.exit_code == 0 {
+            return out.stdout.trim().to_string();
         }
     }
 

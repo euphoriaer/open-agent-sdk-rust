@@ -199,6 +199,14 @@ pub enum SDKMessage {
     /// Real-time text delta from the API stream.
     #[serde(rename = "text_delta")]
     TextDelta { text: String },
+
+    /// Real-time incremental tool output for streaming to the frontend.
+    #[serde(rename = "tool_output")]
+    ToolOutput {
+        tool_use_id: String,
+        tool_name: String,
+        content: String,
+    },
 }
 
 /// Query result returned by the blocking `prompt()` method.

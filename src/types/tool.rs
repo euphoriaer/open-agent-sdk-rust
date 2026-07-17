@@ -4,7 +4,9 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, RwLock};
+
+use crate::types::SDKMessage;
 
 /// Tool input schema following JSON Schema format.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,11 +106,22 @@ pub struct ToolUseContext {
     pub read_file_state: Arc<RwLock<HashMap<String, String>>>,
     /// Override shell binary path (e.g. bash.exe). None uses PATH auto-detection.
     pub shell_binary: Option<String>,
+    /// Event sender for streaming status updates (heartbeat) to the frontend.
+    pub event_sender: Option<mpsc::Sender<SDKMessage>>,
+    /// Tool use ID for associating streaming output with the correct tool call.
+    pub tool_use_id: Option<String>,
 }
 
 impl ToolUseContext {
     pub fn new(working_dir: String) -> Self {
-        Self::with_abort(working_dir, tokio_util::sync::CancellationToken::new())
+        Self {
+            working_dir,
+            abort_signal: tokio_util::sync::CancellationToken::new(),
+            read_file_state: Arc::new(RwLock::new(HashMap::new())),
+            shell_binary: None,
+            event_sender: None,
+            tool_use_id: None,
+        }
     }
 
     pub fn with_abort(
@@ -120,6 +133,8 @@ impl ToolUseContext {
             abort_signal,
             read_file_state: Arc::new(RwLock::new(HashMap::new())),
             shell_binary: None,
+            event_sender: None,
+            tool_use_id: None,
         }
     }
 
@@ -127,12 +142,15 @@ impl ToolUseContext {
         working_dir: String,
         abort_signal: tokio_util::sync::CancellationToken,
         shell_binary: Option<String>,
+        event_sender: Option<mpsc::Sender<SDKMessage>>,
     ) -> Self {
         Self {
             working_dir,
             abort_signal,
             read_file_state: Arc::new(RwLock::new(HashMap::new())),
             shell_binary,
+            event_sender,
+            tool_use_id: None,
         }
     }
 }

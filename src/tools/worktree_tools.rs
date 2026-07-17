@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::process::Stdio;
 use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::RwLock;
 
+use crate::tools::command_runner;
 use crate::types::{Tool, ToolError, ToolInputSchema, ToolResult, ToolUseContext};
 
 /// Info about an active worktree.
@@ -67,15 +67,22 @@ impl Tool for EnterWorktreeTool {
 
     async fn call(&self, input: Value, context: &ToolUseContext) -> Result<ToolResult, ToolError> {
         // Check if we're in a git repo
-        let check = Command::new("git")
+        let mut check_cmd = Command::new("git");
+        check_cmd
             .args(["rev-parse", "--git-dir"])
-            .current_dir(&context.working_dir)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await;
+            .current_dir(&context.working_dir);
+        let check = command_runner::run_command(
+            &mut check_cmd,
+            &context.abort_signal,
+            Some(std::time::Duration::from_secs(10)),
+            None,
+            "EnterWorktree",
+            None,
+            context.tool_use_id.as_deref(),
+        )
+        .await;
 
-        if check.is_err() || !check.unwrap().status.success() {
+        if check.is_err() || check.as_ref().is_ok_and(|o| o.exit_code != 0) {
             return Ok(ToolResult::error("Not in a git repository"));
         }
 
@@ -101,25 +108,39 @@ impl Tool for EnterWorktreeTool {
             });
 
         // Create branch if it doesn't exist (ignore errors if it already exists)
-        let _ = Command::new("git")
+        let mut branch_cmd = Command::new("git");
+        branch_cmd
             .args(["branch", &branch])
-            .current_dir(&context.working_dir)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await;
+            .current_dir(&context.working_dir);
+        let _ = command_runner::run_command(
+            &mut branch_cmd,
+            &context.abort_signal,
+            Some(std::time::Duration::from_secs(10)),
+            None,
+            "EnterWorktree",
+            None,
+            context.tool_use_id.as_deref(),
+        )
+        .await;
 
         // Create worktree
-        let result = Command::new("git")
+        let mut add_cmd = Command::new("git");
+        add_cmd
             .args(["worktree", "add", &worktree_path, &branch])
-            .current_dir(&context.working_dir)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await;
+            .current_dir(&context.working_dir);
+        let result = command_runner::run_command(
+            &mut add_cmd,
+            &context.abort_signal,
+            Some(std::time::Duration::from_secs(10)),
+            None,
+            "EnterWorktree",
+            None,
+            context.tool_use_id.as_deref(),
+        )
+        .await;
 
         match result {
-            Ok(output) if output.status.success() => {
+            Ok(out) if out.exit_code == 0 => {
                 let id = uuid::Uuid::new_v4().to_string();
                 let info = WorktreeInfo {
                     path: worktree_path.clone(),
@@ -135,8 +156,8 @@ impl Tool for EnterWorktreeTool {
                     id, worktree_path, branch
                 )))
             }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
+            Ok(out) => {
+                let stderr = out.stderr;
                 Ok(ToolResult::error(format!(
                     "Error creating worktree: {}",
                     stderr
@@ -196,7 +217,7 @@ impl Tool for ExitWorktreeTool {
         }
     }
 
-    async fn call(&self, input: Value, _context: &ToolUseContext) -> Result<ToolResult, ToolError> {
+    async fn call(&self, input: Value, context: &ToolUseContext) -> Result<ToolResult, ToolError> {
         let id = input
             .get("id")
             .and_then(|v| v.as_str())
@@ -215,29 +236,42 @@ impl Tool for ExitWorktreeTool {
 
         if action == "remove" {
             // Remove worktree
-            let result = Command::new("git")
+            let mut remove_cmd = Command::new("git");
+            remove_cmd
                 .args(["worktree", "remove", &worktree.path, "--force"])
-                .current_dir(&worktree.original_cwd)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output()
-                .await;
+                .current_dir(&worktree.original_cwd);
+            let result = command_runner::run_command(
+                &mut remove_cmd,
+                &context.abort_signal,
+                Some(std::time::Duration::from_secs(10)),
+                None,
+                "ExitWorktree",
+                None,
+                context.tool_use_id.as_deref(),
+            )
+            .await;
 
-            if let Ok(output) = result {
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Ok(ToolResult::error(format!("Error: {}", stderr)));
+            if let Ok(out) = result {
+                if out.exit_code != 0 {
+                    return Ok(ToolResult::error(format!("Error: {}", out.stderr)));
                 }
             }
 
             // Try to delete the branch (ignore errors)
-            let _ = Command::new("git")
+            let mut branch_cmd = Command::new("git");
+            branch_cmd
                 .args(["branch", "-D", &worktree.branch])
-                .current_dir(&worktree.original_cwd)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output()
-                .await;
+                .current_dir(&worktree.original_cwd);
+            let _ = command_runner::run_command(
+                &mut branch_cmd,
+                &context.abort_signal,
+                Some(std::time::Duration::from_secs(10)),
+                None,
+                "ExitWorktree",
+                None,
+                context.tool_use_id.as_deref(),
+            )
+            .await;
         }
 
         store.remove(id);

@@ -1,5 +1,6 @@
 pub mod askuser;
 pub mod bash;
+pub mod command_runner;
 pub mod config_tool;
 pub mod cron_tools;
 pub mod diff;

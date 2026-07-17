@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::process::Stdio;
 use tokio::process::Command;
 
+use crate::tools::command_runner;
 use crate::types::{Tool, ToolError, ToolInputSchema, ToolResult, ToolUseContext};
 
 const DEFAULT_HEAD_LIMIT: usize = 250;
@@ -145,7 +145,13 @@ impl Tool for GrepTool {
             .unwrap_or(DEFAULT_HEAD_LIMIT as u64) as usize;
 
         // Try rg first, fall back to grep
-        let result = run_ripgrep(pattern, search_path, output_mode, &input).await;
+        let result = run_search(
+            "rg",
+            &build_rg_args(pattern, search_path, output_mode, &input),
+            &context,
+            true, // rg uses exit code 1 for no matches
+        )
+        .await;
 
         match result {
             Ok(output) => {
@@ -168,28 +174,61 @@ impl Tool for GrepTool {
 
                 Ok(ToolResult::text(result))
             }
-            Err(e) => {
+            Err(_) => {
                 // Fall back to grep
-                match run_grep(pattern, search_path, output_mode, &input).await {
+                let result = run_search(
+                    "grep",
+                    &build_grep_args(pattern, search_path, output_mode, &input),
+                    &context,
+                    false, // grep exit code 1 = no matches
+                )
+                .await;
+
+                match result {
                     Ok(output) => {
                         if output.is_empty() {
-                            return Ok(ToolResult::text("No matches found.".to_string()));
+                            Ok(ToolResult::text("No matches found.".to_string()))
+                        } else {
+                            Ok(ToolResult::text(output))
                         }
-                        Ok(ToolResult::text(output))
                     }
-                    Err(_) => Ok(ToolResult::error(format!("Search failed: {}", e))),
+                    Err(e) => Ok(ToolResult::error(format!("Search failed: {}", e))),
                 }
             }
         }
     }
 }
 
-async fn run_ripgrep(
-    pattern: &str,
-    path: &str,
-    output_mode: &str,
-    input: &Value,
+async fn run_search(
+    binary: &str,
+    args: &[String],
+    context: &ToolUseContext,
+    no_match_is_ok: bool,
 ) -> Result<String, String> {
+    let mut cmd = Command::new(binary);
+    cmd.args(args)
+        .current_dir("."); // path is already in args
+
+    let output = command_runner::run_command(
+        &mut cmd,
+        &context.abort_signal,
+        None,  // no hard timeout — user cancels if too long
+        context.event_sender.as_ref(),
+        binary,
+        Some("搜索中"),
+        context.tool_use_id.as_deref(),
+    )
+    .await?;
+
+    let ok = output.exit_code == 0 || (no_match_is_ok && output.exit_code == 1);
+    if ok {
+        Ok(output.stdout)
+    } else {
+        Err(output.stderr)
+    }
+}
+
+fn build_rg_args(pattern: &str, path: &str, output_mode: &str, input: &Value) -> Vec<String> {
     let mut args = vec!["--no-heading".to_string()];
 
     match output_mode {
@@ -238,28 +277,10 @@ async fn run_ripgrep(
 
     args.push(pattern.to_string());
     args.push(path.to_string());
-
-    let output = Command::new("rg")
-        .args(&args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if output.status.success() || output.status.code() == Some(1) {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).to_string())
-    }
+    args
 }
 
-async fn run_grep(
-    pattern: &str,
-    path: &str,
-    output_mode: &str,
-    input: &Value,
-) -> Result<String, String> {
+fn build_grep_args(pattern: &str, path: &str, output_mode: &str, input: &Value) -> Vec<String> {
     let mut args = vec!["-r".to_string()];
 
     match output_mode {
@@ -277,14 +298,5 @@ async fn run_grep(
 
     args.push(pattern.to_string());
     args.push(path.to_string());
-
-    let output = Command::new("grep")
-        .args(&args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    args
 }

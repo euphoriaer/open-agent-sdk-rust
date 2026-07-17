@@ -60,7 +60,7 @@ pub async fn execute_tools(
     if !concurrent_calls.is_empty() {
         let mut handles = Vec::new();
         for (id, name, input, tool) in concurrent_calls {
-            let ctx = context.clone();
+            let mut ctx = context.clone();
             let perm_fn = permission_fn.cloned();
             let tool = tool.clone();
             let sender = event_sender.clone();
@@ -78,6 +78,7 @@ pub async fn execute_tools(
                     check_permission(&name, input, perm_fn.as_ref(), &ctx.abort_signal).await;
                 match input {
                     Ok(input) => {
+                        ctx.tool_use_id = Some(id.clone());
                         let result = call_tool_with_cancel(tool.as_ref(), input, &ctx).await;
                         let tool_result = match result {
                             Ok(r) => r,
@@ -111,7 +112,9 @@ pub async fn execute_tools(
         let input = check_permission(&name, input, permission_fn, &context.abort_signal).await;
         match input {
             Ok(input) => {
-                let result = call_tool_with_cancel(tool.as_ref(), input, context).await;
+                let mut ctx = context.clone();
+                ctx.tool_use_id = Some(id.clone());
+                let result = call_tool_with_cancel(tool.as_ref(), input, &ctx).await;
                 let tool_result = match result {
                     Ok(r) => r,
                     Err(e) => ToolResult::error(e.to_string()),

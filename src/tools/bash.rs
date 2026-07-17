@@ -2,13 +2,11 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Stdio;
 use tokio::process::Command;
 
+use crate::tools::command_runner;
 use crate::types::{Tool, ToolError, ToolInputSchema, ToolResult, ToolUseContext};
 
-const DEFAULT_TIMEOUT_MS: u64 = 120_000;
-const MAX_TIMEOUT_MS: u64 = 600_000;
 const MAX_OUTPUT_SIZE: usize = 100_000;
 
 /// Destructive command patterns that should be flagged.
@@ -36,7 +34,7 @@ impl Tool for BashTool {
     }
 
     fn description(&self) -> &str {
-        "Executes a given bash command and returns its output. Use for system commands and terminal operations that require shell execution."
+        "Executes a given bash command and returns its output. Use for system commands and terminal operations that require shell execution. Long-running commands will periodically report partial output."
     }
 
     fn input_schema(&self) -> ToolInputSchema {
@@ -48,13 +46,6 @@ impl Tool for BashTool {
                     json!({
                         "type": "string",
                         "description": "The command to execute"
-                    }),
-                ),
-                (
-                    "timeout".to_string(),
-                    json!({
-                        "type": "number",
-                        "description": "Optional timeout in milliseconds (max 600000)"
                     }),
                 ),
                 (
@@ -109,31 +100,44 @@ impl Tool for BashTool {
             )));
         }
 
-        let timeout_ms = input
-            .get("timeout")
-            .and_then(|t| t.as_u64())
-            .unwrap_or(DEFAULT_TIMEOUT_MS)
-            .min(MAX_TIMEOUT_MS);
+        // Build shell command
+        let shell = build_shell_runner(command, context.shell_binary.as_deref());
+        let mut cmd = Command::new(&shell.program);
+        cmd.args(&shell.args)
+            .current_dir(&context.working_dir);
+        #[cfg(windows)]
+        {
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
 
-        let output = tokio::time::timeout(
-            std::time::Duration::from_millis(timeout_ms),
-            run_command(command, &context.working_dir, context.shell_binary.as_deref()),
+        let description = input
+            .get("description")
+            .and_then(|d| d.as_str());
+
+        let output = command_runner::run_command(
+            &mut cmd,
+            &context.abort_signal,
+            None, // no hard timeout — use heartbeat + cancel instead
+            context.event_sender.as_ref(),
+            "Bash",
+            description,
+            context.tool_use_id.as_deref(),
         )
         .await;
 
         match output {
-            Ok(Ok((stdout, stderr, exit_code))) => {
+            Ok(out) => {
                 let mut result = String::new();
 
-                if !stdout.is_empty() {
-                    result.push_str(&stdout);
+                if !out.stdout.is_empty() {
+                    result.push_str(&out.stdout);
                 }
-                if !stderr.is_empty() {
+                if !out.stderr.is_empty() {
                     if !result.is_empty() {
                         result.push('\n');
                     }
                     result.push_str("STDERR:\n");
-                    result.push_str(&stderr);
+                    result.push_str(&out.stderr);
                 }
 
                 if result.len() > MAX_OUTPUT_SIZE {
@@ -141,55 +145,23 @@ impl Tool for BashTool {
                     result.push_str("\n... (output truncated)");
                 }
 
-                if exit_code != 0 {
-                    result.push_str(&format!("\n\nExit code: {}", exit_code));
+                if out.exit_code != 0 {
+                    result.push_str(&format!("\n\nExit code: {}", out.exit_code));
                 }
 
                 if result.is_empty() {
                     result = "(no output)".to_string();
                 }
 
-                Ok(if exit_code != 0 {
+                Ok(if out.exit_code != 0 {
                     ToolResult::error(result)
                 } else {
                     ToolResult::text(result)
                 })
             }
-            Ok(Err(e)) => Ok(ToolResult::error(format!("Command failed: {}", e))),
-            Err(_) => Ok(ToolResult::error(format!(
-                "Command timed out after {}ms",
-                timeout_ms
-            ))),
+            Err(e) => Ok(ToolResult::error(format!("Command failed: {}", e))),
         }
     }
-}
-
-async fn run_command(
-    command: &str,
-    working_dir: &str,
-    shell_override: Option<&str>,
-) -> Result<(String, String, i32), std::io::Error> {
-    let shell_path = crate::mcp::shell_path::get_shell_path();
-    let shell = build_shell_runner(command, shell_override);
-    let mut cmd = Command::new(&shell.program);
-    cmd.args(&shell.args)
-        .current_dir(working_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW — 禁止创建控制台窗口
-    }
-    if !shell_path.is_empty() {
-        cmd.env("PATH", shell_path);
-    }
-    let output = cmd.output().await?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let exit_code = output.status.code().unwrap_or(-1);
-
-    Ok((stdout, stderr, exit_code))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
