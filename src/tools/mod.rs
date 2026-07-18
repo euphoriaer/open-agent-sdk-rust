@@ -16,6 +16,7 @@ pub mod notebook_edit;
 pub mod plan_tools;
 pub mod registry;
 pub mod send_message;
+pub mod skill_manager;
 pub mod skill_tool;
 pub mod tasks;
 pub mod team_tools;

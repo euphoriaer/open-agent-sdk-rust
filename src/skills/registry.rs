@@ -43,6 +43,12 @@ impl SkillRegistry {
         self.skills.get(name)
     }
 
+    /// Remove a skill by name from the registry.
+    pub fn remove(&mut self, name: &str) {
+        self.skills.remove(name);
+        self.disabled.remove(name);
+    }
+
     /// Get skills that the model can auto-invoke (enabled + not disable_model_invocation).
     pub fn auto_invocable(&self) -> Vec<&LoadedSkill> {
         self.skills
